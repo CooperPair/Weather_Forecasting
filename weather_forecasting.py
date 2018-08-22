@@ -1,137 +1,131 @@
-import numpy as np
-import pandas as pd
 from pandas import Series
+from pandas import concat
 from pandas import read_csv
-import tensorflow as tf
-import matplotlib.pyplot as plt
-import datetime
-import warnings
+from pandas import datetime
+from tensorflow import keras
+from sklearn.metrics import mean_squared_error
+from sklearn.preprocessing import MinMaxScaler
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.layers import LSTM
+from math import sqrt
+from matplotlib import pyplot
+import numpy
+from pandas import DataFrame
+ 
+# date-time parsing function for loading the dataset
+#def parser(x):
+#	return datetime.strptime(x,'%d-%b-%Y')
+series = read_csv('testset.csv')
 
+data = series[' _tempm']
+ 
+# frame a sequence as a supervised learning problem
+def timeseries_to_supervised(data, lag=1):
+	df = DataFrame(data)
+	columns = [df.shift(i) for i in range(1, lag+1)]
+	columns.append(df)
+	df = concat(columns, axis=1)
+	df.fillna(0, inplace=True)
+	return df
+ 
+# create a differenced series
+def difference(dataset, interval=1):
+	diff = list()
+	for i in range(interval, len(dataset)):
+		value = dataset[i] - dataset[i - interval]
+		diff.append(value)
+	return Series(diff)
+ 
+# invert differenced value
+def inverse_difference(history, yhat, interval=1):
+	return yhat + history[-interval]
+ 
+# scale train and test data to [-1, 1]
+def scale(train, test):
+	# fit scaler
+	scaler = MinMaxScaler(feature_range=(-1, 1))
+	scaler = scaler.fit(train)
+	# transform train
+	train = train.reshape(train.shape[0], train.shape[1])
+	train_scaled = scaler.transform(train)
+	# transform test
+	test = test.reshape(test.shape[0], test.shape[1])
+	test_scaled = scaler.transform(test)
+	return scaler, train_scaled, test_scaled
+ 
+# inverse scaling for a forecasted value
+def invert_scale(scaler, X, value):
+	new_row = [x for x in X] + [value]
+	array = numpy.array(new_row)
+	array = array.reshape(1, len(array))
+	inverted = scaler.inverse_transform(array)
+	return inverted[0, -1]
+ 
+# fit an LSTM network to training data
+def fit_lstm(train, batch_size, nb_epoch, neurons):
+	X, y = train[:, 0:-1], train[:, -1]
+	X = X.reshape(X.shape[0], 1, X.shape[1])
+	model = Sequential()
+	model.add(LSTM(neurons, batch_input_shape=(batch_size, X.shape[1], X.shape[2]), stateful=True))
+	model.add(Dense(1))
+	model.compile(loss='mean_squared_error', optimizer='adam')
+	for i in range(nb_epoch):
+		model.fit(X, y, epochs=1, batch_size=batch_size, verbose=0, shuffle=False)
+		model.reset_states()
+	return model
+ 
+# make a one-step forecast
+def forecast_lstm(model, batch_size, X):
+	X = X.reshape(1, 1, len(X))
+	yhat = model.predict(X, batch_size=batch_size)
+	return yhat[0,0]
+ 
+# load dataset
+def parser(x):
+	return datetime.strptime(x,'%d-%b-%Y')
+series = read_csv('testset.csv')
 
-warnings.filterwarnings("ignore")
-data = pd.read_csv("testset.csv")
-#drop datetime variable
-#data = data.drop(['datetime'], 1)
-
-temperature = data[' _tempm']
-temperature.replace(0, np.NaN)
-
-temperature.fillna(temperature.mean(), inplace = True)
-
-#print(temperature.shape)
-
-
-#Making data a numpy array
-temperature = temperature.values
-temperature = temperature.reshape((100990,1))
-n = temperature.shape[0]
-#visualising dataset finding if missing value is there or not
-'''
-plt.plot(temperature)
-plt.show()
-'''
-#Preparing training and test data
-train_start = 0
-train_end = int(np.floor(0.8*n))
-test_start = train_end + 1 
-test_end = n
-temp_train = temperature[train_start:train_end]
-y_test = temperature[train_end+1:]
-temp_test = temperature[train_end+1:]
-
-# temp_train = temperature[np.arange(train_start, train_end)]
-# temp_test = temperature[np.arange(test_start, test_end)]
-
-#Placeholder
-X = tf.placeholder(dtype=tf.float32 , shape=[100990,1])
-Y = tf.placeholder(dtype=tf.float32 , shape = [None] )#output actual
-
-
-#Mode architecture parameters:
-#Three layer model
-n_temp = 1
-n_neurons_1 = 200
-n_neurons_2 = 200
-n_neurons_3 = 200
-n_target = 1
-
-
-# Initializers
-sigma = 1
-weight_initializer = tf.variance_scaling_initializer(mode="fan_avg", distribution="uniform", scale=sigma)
-bias_initializer = tf.zeros_initializer()
-
-# Layer 1: Variables for hidden weights and biases
-W1 = tf.Variable(weight_initializer([n_temp, n_neurons_1]))#1*200
-b1 = tf.Variable(bias_initializer([n_neurons_1]))
-
-# Layer 2: Variables for hidden weights and biases
-W2 = tf.Variable(weight_initializer([n_neurons_1, n_neurons_2]))
-b2 = tf.Variable(bias_initializer([n_neurons_2]))
-
-# Layer 3: Variables for hidden weights and biases
-W3 = tf.Variable(weight_initializer([n_neurons_2, n_neurons_3]))
-b3 = tf.Variable(bias_initializer([n_neurons_3]))
-
-# Output layer: Variables for output weights and biases
-W_out = tf.Variable(weight_initializer([n_neurons_3, n_target]))
-bias_out = tf.Variable(bias_initializer([n_target]))
-
-# Hidden layer
-hidden_1 = tf.nn.relu(tf.add(tf.matmul(X, W1), b1))
-hidden_2 = tf.nn.relu(tf.add(tf.matmul(hidden_1, W2), b2))
-hidden_3 = tf.nn.relu(tf.add(tf.matmul(hidden_2, W3), b3))
-
-# Output layer (must be transposed)
-out = tf.transpose(tf.add(tf.matmul(hidden_3, W_out), bias_out))
-
-#cost function
-mse = tf.reduce_mean(tf.squared_difference(out, Y))
-#Optimizer
-opt = tf.train.AdamOptimizer().minimize(mse)
-
-# Make Session
-net = tf.Session()
-
-
-# Run initializer
-net.run(tf.global_variables_initializer())
-
-
-# Fitting the neural network
-# Number of epochs and batch size
-epochs = 1
-batch_size = 100990
-
-for e in range(epochs):
-
-    # Shuffle training data
-    shuffle_indices = np.random.permutation(np.arange(len(temp_train)))
-    print(shuffle_indices)#shuffle the indices
-    temp_train = temp_train[shuffle_indices]
-    print(temp_train)#corrosponding indices value get also shuffled
-    # Minibatch training
-    for i in range(0, len(temp_train)//batch_size):
-        print("I am smart")
-        start = i * batch_size#
-        batch_x = temp_train[start:start + batch_size]
-        # Run optimizer with batch
-        p = net.run(opt, feed_dict={X: batch_x})
-        print(p)
-
-        ''' # Show progress
-        if np.mod(i, 4) == 0:'''
-        # Prediction
-        pred = net.run(out, feed_dict={X: temp_test})
-        print(pred)
-        line2.set_ydata(pred)
-        plt.title('Epoch ' + str(e) + ', Batch ' + str(i))
-        file_name = 'img/epoch_' + str(e) + '_batch_' + str(i) + '.jpg'       #making image file
-        plt.savefig(file_name)
-        plt.pause(0.01)
-        plt.show()
-'''
-# Print final MSE after Training
-mse_final = net.run(mse, feed_dict={X: temp_test, Y: y_test})
-print(mse_final)
-'''
+data = series[' _tempm'] 
+# transform data to be stationary
+raw_values = data.values
+diff_values = difference(raw_values, 1)
+ 
+# transform data to be supervised learning
+supervised = timeseries_to_supervised(diff_values, 1)
+supervised_values = supervised.values
+ 
+# split data into train and test-sets
+train, test = supervised_values[0:-12], supervised_values[-12:]
+ 
+# transform the scale of the data
+scaler, train_scaled, test_scaled = scale(train, test)
+ 
+# fit the model
+lstm_model = fit_lstm(train_scaled, 1, 3000, 4)
+# forecast the entire training dataset to build up state for forecasting
+train_reshaped = train_scaled[:, 0].reshape(len(train_scaled), 1, 1)
+lstm_model.predict(train_reshaped, batch_size=1)
+ 
+# walk-forward validation on the test data
+predictions = list()
+for i in range(len(test_scaled)):
+	# make one-step forecast
+	X, y = test_scaled[i, 0:-1], test_scaled[i, -1]
+	yhat = forecast_lstm(lstm_model, 1, X)
+	# invert scaling
+	yhat = invert_scale(scaler, X, yhat)
+	# invert differencing
+	yhat = inverse_difference(raw_values, yhat, len(test_scaled)+1-i)
+	# store forecast
+	predictions.append(yhat)
+	expected = raw_values[len(train) + i + 1]
+	print('Month=%d, Predicted=%f, Expected=%f' % (i+1, yhat, expected))
+ 
+# report performance
+rmse = sqrt(mean_squared_error(raw_values[-12:], predictions))
+print('Test RMSE: %.3f' % rmse)
+# line plot of observed vs predicted
+pyplot.plot(raw_values[-12:])
+pyplot.plot(predictions)
+pyplot.show()
