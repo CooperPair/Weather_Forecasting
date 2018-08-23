@@ -17,7 +17,9 @@ from pandas import DataFrame
 #def parser(x):
 #	return datetime.strptime(x,'%d-%b-%Y')
 series = read_csv('testset.csv')
-
+series = series.drop('datetime', 1)
+series = series.drop(' _conds', 1)
+series = series.drop(' _wdire', 1)
 data = series[' _tempm']
  
 # frame a sequence as a supervised learning problem
